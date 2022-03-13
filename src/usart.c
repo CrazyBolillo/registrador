@@ -6,12 +6,12 @@ void start_usart(uint32_t baud) {
     UCSR0C = 0x0E;
 }
 
-void write_usart(unsigned char data) {
+void write_usart(char data) {
     while (!(UCSR0A & (1<<UDRE0)));
     UDR0 = data;
 } 
 
-void stwrite_usart(unsigned char *data) {
+void stwrite_usart(char *data) {
     while(*data != '\0') {
         while (!(UCSR0A & (1<<UDRE0)));
         UDR0 = *data;
