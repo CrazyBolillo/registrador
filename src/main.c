@@ -1,7 +1,10 @@
 #include <avr/io.h>
 #include <util/delay.h>
 #include <avr/interrupt.h>
+#include <stdio.h>
+#include <stdint.h>
 
+#include "adc.h"
 #include "pwm.h"
 #include "usart.h"
 
@@ -12,11 +15,18 @@
 #define SERVO_MIN 600
 #define SERVO_MAX 2500
 
+uint16_t adc_read;
+unsigned char usart_buffer[32];
+
 void servo_boot_effect();
+void adc_to_servo();
 
 int main() {
     start_usart(9600);
     stwrite_usart("Booting up --> v1.0\n");
+
+    start_adc();
+    set_adc_ch(0);
 
     // PD5, PD6 as output. Pull-ups on PD2, PD3
     PORTD = 0x0C;
@@ -30,7 +40,13 @@ int main() {
     EIMSK = 0x03;
     sei();
 
+    start_pwm();
     while (1) {
+        read_adc(&adc_read);
+        sprintf(&usart_buffer, "%d\n", adc_read);
+        stwrite_usart(usart_buffer);
+        adc_to_servo(adc_read);
+        _delay_ms(200);
     }
 
     return 0;
@@ -45,6 +61,10 @@ void servo_boot_effect() {
     for (; OCR1A > SERVO_MIN; OCR1A--) { _delay_us(500); }
     stop_pwm();
     PORTD &= ~(1 << INDICATOR_LED);
+}
+
+void adc_to_servo(uint16_t adc) {
+    OCR1A = (2000 / 1023) * adc;
 }
 
 
