@@ -47,9 +47,14 @@
 #define CAL_ZERO 'Z'
 #define CAL_MAX 'M'
 
+#define CALIB_CH 0
+#define READ_CH 1
+
 uint16_t adc_read;
 uint16_t usr_servo_min = SERVO_MIN;
 uint16_t usr_servo_max = SERVO_MAX;
+uint16_t usr_servo_range;
+float usr_servo_k;
 volatile unsigned char calibrating = 0;
 volatile unsigned char cal_status = CAL_NONE;
 char usart_buffer[32];
@@ -59,8 +64,10 @@ unsigned char steps[] = {0x80, 0xC0, 0x40, 0x60, 0x20, 0x30, 0x10, 0x90};
 #define PRINT(fmt, args...) sprintf(&usart_buffer, fmt, args); \
 stwrite_usart(&usart_buffer);
 
+void setup_usr_servo();
 void servo_boot_effect();
 uint16_t adc_to_servo();
+uint16_t usr_adc_to_servo();
 void start();
 void stop();
 
@@ -84,6 +91,7 @@ int main() {
     
     setup_pwm();
     servo_boot_effect();
+    setup_usr_servo();
 
     // Enable interrupts on low state for INT0 and INT1 (PD2 & PD3).
     EICRA = 0x00;
@@ -102,25 +110,26 @@ int main() {
             stwrite_usart("Set minimum angle\n");
 
             start_adc();
-            set_adc_ch(0);
+            set_adc_ch(CALIB_CH);
             OCR1A = SERVO_MIN;
             start_pwm();
             while(cal_status == CAL_ZERO) {
                 read_adc(&adc_read);
-                usr_servo_min = adc_to_servo(adc_read);
+                usr_servo_min = adc_to_servo();
                 OCR1A = usr_servo_min;
             }
             stwrite_usart("Set max angle\n");
             while (cal_status == CAL_MAX) {
                 read_adc(&adc_read);
-                usr_servo_max = adc_to_servo(adc_read);
+                usr_servo_max = adc_to_servo();
                 OCR1A = usr_servo_max;
             }
             calibrating = 0;
             cal_status = CAL_NONE;
-            PRINT("Finished calibration. Min: %d -- Max: %d\n", 
+            PRINT("--- Finished calibration ---\nMin: %d -- Max: %d\n", 
                 usr_servo_min, usr_servo_max
             );
+            setup_usr_servo();
             OCR1A = usr_servo_min;
             _delay_ms(500);
             OCR1A = usr_servo_max;
@@ -130,7 +139,7 @@ int main() {
             stop_pwm();
         }
         else if (IS_RUNNING != 0) {
-            set_adc_ch(1);
+            set_adc_ch(CALIB_CH);
             read_adc(&adc_read);
             uint16_t speed = (adc_read / 4) - 1;
             if (speed >= MIN_STEP_SPEED) {
@@ -139,10 +148,22 @@ int main() {
             else {
                 OCR0A = MIN_STEP_SPEED;
             }
+            set_adc_ch(READ_CH);
+            read_adc(&adc_read);
+            OCR1A = usr_adc_to_servo();
         }
     }
 
     return 0;
+}
+
+/**
+ * Perform the necessary calculations to correctly move the servo motor later on, based on user
+ * configuration.
+*/
+void setup_usr_servo() { 
+    usr_servo_range = usr_servo_max - usr_servo_min;
+    usr_servo_k = usr_servo_range / 1023;
 }
 
 /**
@@ -167,8 +188,18 @@ void servo_boot_effect() {
  * An ADC reading of 0 is equal to a 0 degree angle.
  * An ADC reading of 1023 is equal to a 180 degrees angle.
 */
-uint16_t adc_to_servo(uint16_t adc) {
-    return (2 * adc) + SERVO_MIN;
+uint16_t adc_to_servo() {
+    return (2 * adc_read) + SERVO_MIN;
+}
+
+/**
+ * Convert an ADC reading to the pulse width required to obtain a certain angle in a servo motor. Takes in account
+ * user defined max and min angles.
+ * An ADC reading of 0 is equal to the minimum angle set by the user.
+ * An ADC reading of 1023 is equal to the max angle set by the user.
+*/
+uint16_t usr_adc_to_servo() {
+    return (usr_servo_k * adc_read) + usr_servo_min;
 }
 
 void start() {

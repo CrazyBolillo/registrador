@@ -6,7 +6,7 @@
 
 void start_adc();
 void set_adc_ch(uint8_t channel);
-void read_adc(uint16_t *read);
+void read_adc(volatile uint16_t *read);
 void stop_adc();
 
 
