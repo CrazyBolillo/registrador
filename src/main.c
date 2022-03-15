@@ -54,7 +54,7 @@ uint16_t adc_read;
 uint16_t usr_servo_min = SERVO_MIN;
 uint16_t usr_servo_max = SERVO_MAX;
 uint16_t usr_servo_range;
-float usr_servo_k;
+uint32_t usr_servo_k;
 volatile unsigned char calibrating = 0;
 volatile unsigned char cal_status = CAL_NONE;
 char usart_buffer[32];
@@ -126,10 +126,10 @@ int main() {
             }
             calibrating = 0;
             cal_status = CAL_NONE;
-            PRINT("--- Finished calibration ---\nMin: %d -- Max: %d\n", 
-                usr_servo_min, usr_servo_max
-            );
             setup_usr_servo();
+            PRINT("--- Finished calibration ---\nMin: %d -- Max: %d -- Range: %d -- K: %lu\n", 
+                usr_servo_min, usr_servo_max, usr_servo_range, usr_servo_k
+            );
             OCR1A = usr_servo_min;
             _delay_ms(500);
             OCR1A = usr_servo_max;
@@ -137,9 +137,26 @@ int main() {
             OCR1A = usr_servo_min;
             _delay_ms(500);
             stop_pwm();
+            /**
+             * -- BUG --
+             * usr_servo_k changes value (god knows why) after being calculated correctly in the previous call (above)
+             * to setup_usr_servo(), so it is called once again to recalculate the correct value. It is no longer
+             * randomly changed after that.
+            */
+            setup_usr_servo();
         }
         else if (IS_RUNNING != 0) {
-            set_adc_ch(CALIB_CH);
+            /**
+             * -- BUG --
+             * Weird inconsistency.
+             * Channels appear to be inverted. Instead of actually reading from channel 1, it takes the reading
+             * from channel 0 and viceversa. Seems to do with timing and quickly switching from one channel to another.
+             * Since channels are inverted in practice, they are inverted in code. The delay was also needed to stop
+             * the behaviour and the double ADC read is just paranoia to clear any junk that could be read.
+            */
+            set_adc_ch(READ_CH);
+            _delay_ms(10);
+            read_adc(&adc_read);
             read_adc(&adc_read);
             uint16_t speed = (adc_read / 4) - 1;
             if (speed >= MIN_STEP_SPEED) {
@@ -148,9 +165,12 @@ int main() {
             else {
                 OCR0A = MIN_STEP_SPEED;
             }
-            set_adc_ch(READ_CH);
+            set_adc_ch(CALIB_CH);
+            _delay_ms(10);
+            read_adc(&adc_read);
             read_adc(&adc_read);
             OCR1A = usr_adc_to_servo();
+            PRINT("OCR1A: %d\n", OCR1A);
         }
     }
 
@@ -163,7 +183,7 @@ int main() {
 */
 void setup_usr_servo() { 
     usr_servo_range = usr_servo_max - usr_servo_min;
-    usr_servo_k = usr_servo_range / 1023;
+    usr_servo_k = (usr_servo_range * 100LU) / 1023LU;
 }
 
 /**
@@ -199,7 +219,7 @@ uint16_t adc_to_servo() {
  * An ADC reading of 1023 is equal to the max angle set by the user.
 */
 uint16_t usr_adc_to_servo() {
-    return (usr_servo_k * adc_read) + usr_servo_min;
+    return ((usr_servo_k * (uint32_t)adc_read) / 100LU) + usr_servo_min;
 }
 
 void start() {
@@ -218,16 +238,17 @@ void stop() {
     stop_adc();
     TCCR0B &= 0xF8;
     stop_pwm();
+    PORTD &= 0x0F;
 }
 
 /**
  * Interrupt vector to start or stop sampling. Activated when INT0 
  * (D2 on Arduino) is sent into a low state.
 */
-ISR(INT0_vect) {
+ISR(INT1_vect) {
     _delay_ms(DEBOUNCE_MS);
-    if ((PIND & (1 << PD2)) == 0) {
-        while ((PIND & (1 << PD2)) == 0);
+    if ((PIND & (1 << PD3)) == 0) {
+        while ((PIND & (1 << PD3)) == 0);
         INDICATOR_TGL;
         if (IS_RUNNING != 0) {
             start();
@@ -244,10 +265,11 @@ ISR(INT0_vect) {
  * the angle for a max reading.
  * Activated when INT1 (D3 on Arduino) is sent into a low state.
 */
-ISR(INT1_vect) {
+ISR(INT0_vect) {
     _delay_ms(DEBOUNCE_MS);
-    if ((PIND & (1 << PD3)) == 0) {
-        while((PIND & (1 << PD3)) == 0);
+    if ((PIND & (1 << PD2)) == 0) {
+        while((PIND & (1 << PD2)) == 0);
+        if (IS_RUNNING != 0) { stop (); }
         INDICATOR_OFF;
         calibrating = 1;
         if (cal_status == CAL_NONE) {
